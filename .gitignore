@@ -1,0 +1,8 @@
+*.o
+*.swp
+*.swo
+obj/
+.*/
+compile_commands.json
+washmywaves*
+test_data/
