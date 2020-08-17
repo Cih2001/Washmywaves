@@ -1,9 +1,16 @@
+#include <algorithm>
+#include <iterator>
+#include <math.h>
+
 #include "wav/header.hh"
 #include "utils/global.hh"
 
 #define RIFF_CHUNK_ID 0x46464952
 #define RIFF_FORMAT_WAVE 0x45564157
 #define FMT_CHUNK_ID 0x20746d66
+#define DATA_CHUNK_ID 0x61746164
+
+#define MAX_BLOCK_ALIGN 8
 
 WavHeader::WavHeader(std::istream& input) : input_(input) {
   if (!input_) throw std::runtime_error("cannot open input stream.");
@@ -29,17 +36,8 @@ bool WavHeader::IsValidWav() {
       riff_header.format != RIFF_FORMAT_WAVE) {
     return false;
   }
- 
-  // TODO: we assume that fmt chunk comes directly after the riff_header.
-  // this is not assumption is not mandatory and is not enforced by RFC,
-  // and should be fixed.
-  auto fmt_chunk = CastBytes<FmtChunk>(input_);
-  if (!input_) {
-    // stream not long enough or an internal error in stream.
-    return false;
-  }
-  HEX_DUMP((const unsigned char *)&fmt_chunk, sizeof(fmt_chunk));
-  if (fmt_chunk.chunk_header.id != FMT_CHUNK_ID) {
+  auto fmt_pos = FindFormatChunkHeader();
+  if (fmt_pos < 0) {
     return false;
   }
 
@@ -47,3 +45,197 @@ bool WavHeader::IsValidWav() {
   return true;
 }
 
+int WavHeader::FindFormatChunkHeader() {
+  input_.seekg(sizeof(RiffChunk));
+
+  do {
+    auto chunk = CastBytes<ChunkHeader>(input_);
+    if (!input_) {
+      // stream not long enough or an internal error in stream.
+      return -1;
+    }
+    if (chunk.id == FMT_CHUNK_ID) {
+      return (int)input_.tellg() - sizeof(chunk);
+    }
+    input_.seekg((int)input_.tellg() + chunk.size);
+  } while (true);
+  return -1;
+}
+
+WavHeader::FmtChunk WavHeader::GetFormatChunkHeader() {
+  WavHeader::FmtChunk result;
+  auto fmt_pos = FindFormatChunkHeader();
+  if (fmt_pos >= 0) {
+    input_.seekg(fmt_pos);
+    result = CastBytes<FmtChunk>(input_);
+  }
+  return result;
+}
+
+int WavHeader::FindDataChunkHeader() {
+  input_.seekg(sizeof(RiffChunk));
+  do {
+    auto chunk = CastBytes<ChunkHeader>(input_);
+    if (!input_) {
+      // stream not long enough or an internal error in stream.
+      return -1;
+    }
+
+    if (chunk.id == DATA_CHUNK_ID) {
+      return (int)input_.tellg() - sizeof(chunk);
+    }
+    input_.seekg((int)input_.tellg() + chunk.size);
+  } while (true);
+  return -1;
+}
+
+size_t WavHeader::GetDataSize() {
+  auto data_pos = FindDataChunkHeader();
+  if (data_pos >= 0) {
+    input_.seekg(data_pos);
+    auto result = CastBytes<DataChunk>(input_);
+    return result.chunk_header.size;
+  }
+  return 0;
+}
+
+size_t WavHeader::GetNumberOfSamples() {
+  auto block_align = GetFormatChunkHeader().block_align;
+  return GetDataSize() / block_align;
+}
+
+int WavHeader::GetDataIndex() {
+  auto data_pos = FindDataChunkHeader();
+  if (data_pos >= 0) {
+    return data_pos + offsetof(DataChunk, data);
+  }
+  return 0;
+}
+
+uint16_t map16(uint16_t val, unsigned int val_bits) {
+  if (val == 0) return 0;
+  int16_t out_minimum = -0x7fff - 1; 
+  int16_t out_maximum = 0x7fff; 
+  int16_t in_minimum = - (1 << (val_bits - 1));
+  int16_t in_maximum = (1 << (val_bits - 1)) - 1;
+
+  double pos = (double)(val - in_minimum) / (double)( in_maximum - in_minimum);
+  auto result = ((double)out_maximum - (double)out_minimum) * pos +
+      (double)out_minimum;
+  return (uint16_t) result;
+}
+
+uint32_t map32(uint32_t val, unsigned int val_bits) {
+  if (val == 0) return 0;
+  const int32_t out_minimum = -0x7fffffff - 1;
+  const int32_t out_maximum = 0x7fffffff;
+  int32_t in_minimum = - (1 << (val_bits - 1));
+  int32_t in_maximum = (1 << (val_bits - 1)) - 1;
+
+  double pos = (double)(val - in_minimum) / (double)( in_maximum - in_minimum);
+  auto result = ((double)out_maximum - (double)out_minimum) * pos +
+      (double)out_minimum;
+  return (uint32_t) result;
+}
+
+uint16_t ScaleAmplitude8(uint8_t val) {
+  // 8-bit PCM is unsigned with the center point of 128.
+  return map16(val - 128, 8);
+}
+
+uint16_t ScaleAmplitude16(uint16_t val, unsigned int bits_per_sample) {
+  unsigned int sample_bits_ceiling = ceil((float)bits_per_sample / 8) * 8;
+  // clear garbage bits in the padded bytes.
+  if (bits_per_sample < 16) {
+    val &= (1 << bits_per_sample) - 1; 
+  }
+  uint16_t out_val = 0;
+  for (unsigned int b = 0; b < bits_per_sample; b++) {
+    out_val |= (val & (1 << b)) ? 1 << b : 0;
+  }
+  // convert value to 2nd compliment value.
+  if ((bits_per_sample < sample_bits_ceiling) &&
+      ((out_val & (1 << (bits_per_sample - 1))) != 0)) {
+    out_val -= 1 << (bits_per_sample);
+  }
+  return map16(out_val, bits_per_sample);
+}
+
+uint32_t ScaleAmplitude32(uint32_t val, unsigned int bits_per_sample) {
+  unsigned int sample_bits_ceiling = ceil((float)bits_per_sample / 8) * 8;
+  // clear garbage bits in the padded bytes.
+  if (bits_per_sample < 32) {
+    val &= (1 << bits_per_sample) - 1; 
+  }
+  uint32_t out_val = 0;
+  for (unsigned int b = 0; b < bits_per_sample; b++) {
+    out_val |= (val & (1 << b)) ? 1 << b : 0;
+  }
+  // convert value to 2nd compliment value.
+  if ((bits_per_sample < sample_bits_ceiling) &&
+      ((out_val & (1 << (bits_per_sample - 1))) != 0)) {
+    out_val -= 1 << (bits_per_sample);
+  }
+  return map32(out_val, bits_per_sample);
+}
+
+uint16_t WavHeader::GetAudioFormat() {
+  auto fmt_chunk = GetFormatChunkHeader();
+  if (fmt_chunk.format_tag != WAVE_FORMAT_EXTENSIBLE) {
+    return fmt_chunk.format_tag;
+  }
+  return  fmt_chunk.audio_format;
+}
+
+std::unique_ptr<std::string> WavHeader::ReadPCMData(unsigned int channel) {
+  auto data_index = GetDataIndex();
+  auto number_of_samples = GetNumberOfSamples();
+  auto block_align = GetFormatChunkHeader().block_align;
+  auto bits_per_sample = GetFormatChunkHeader().bits_per_sample;
+  unsigned int sample_bits_ceiling = ceil((float)bits_per_sample / 8) * 8;
+  auto number_of_channels = GetFormatChunkHeader().number_of_channels;
+  auto result = new std::string();
+  if (number_of_channels == 1 && channel > 0) {
+    return std::unique_ptr<std::string>(result);
+  }
+  auto buffer_size = number_of_samples;
+  if (sample_bits_ceiling <= 16) {
+    buffer_size *= 2;
+  } else {
+    buffer_size *= 4;
+  }
+  result->resize(buffer_size);
+
+  // read data.
+  input_.seekg(data_index);
+  
+  for (size_t i = 0; i < number_of_samples; i++) {
+    char block[MAX_BLOCK_ALIGN] = {0};
+    input_.read(block, block_align);
+    if (i < 5) {
+      HEX_DUMP((const unsigned char *)block, 8);
+    }
+    if (sample_bits_ceiling == 8) {
+      uint8_t val = ((uint8_t *) block)[(channel == 0) ? 0 : 1];
+      auto out_offset = &((uint16_t *) result->c_str())[i];
+      *out_offset = ScaleAmplitude8(val);
+    }
+    else if (sample_bits_ceiling == 16) {
+      uint16_t val = ((uint16_t *) block)[(channel == 0) ? 0 : 1];
+      auto out_offset = &((uint16_t *) result->c_str())[i];
+      *out_offset = ScaleAmplitude16(val, bits_per_sample);
+    }
+    else if (sample_bits_ceiling == 24 || sample_bits_ceiling == 32) {
+      uint32_t val = 0;
+      if (channel == 0) {
+        val = ((uint32_t *) block)[0];
+      } else {
+        val = ((uint32_t *)((uint8_t *)block + block_align/2))[0];
+      }
+      auto out_offset = &((uint32_t *) result->c_str())[i];
+      *out_offset = ScaleAmplitude32(val, bits_per_sample);
+    }
+  }
+
+  return std::unique_ptr<std::string>(result);
+}

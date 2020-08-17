@@ -8,8 +8,8 @@ CXX_FILES := $(shell find $(SRC_DIR) | grep ".cc$$" | xargs echo)
 OBJ_FILES := $(patsubst $(SRC_DIR)/%.cc,$(OBJ_DIR)/%.o,$(CXX_FILES))
 OBJ_DIRS := $(subst /,/,$(sort $(dir $(OBJ_FILES))))
 
-LD_FLAGS := ./lib/libmp3lame.a
-CXXFLAGS := -Wall -c -I$(SRC_DIR) -s -O3
+LD_FLAGS := ./lib/libmp3lame.a -lpthread
+CXXFLAGS := -Wall -c -I$(SRC_DIR) -s -O3 -std=c++17
 
 all: CXXFLAGS += -g -s
 all: LD_FLAGS += -s

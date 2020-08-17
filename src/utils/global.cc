@@ -1,5 +1,4 @@
 #include <cstdio>
-#include <cinttypes>
 
 #include "utils/global.hh"
 
@@ -32,3 +31,15 @@ void HEX_DUMP(const unsigned char* buffer, size_t size) {
   return;
 }
 #endif
+
+size_t GetFileSize(std::ifstream& file) {
+  if (!file.is_open()) {
+    return 0;
+  }
+
+  auto previous_pos = file.tellg();
+  file.seekg(0, std::ios::end);
+  size_t file_size = file.tellg();
+  file.seekg(previous_pos);
+  return file_size;
+}
