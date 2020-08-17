@@ -10,21 +10,32 @@ void* ThreadEntry(void* arg) {
   pthread_exit(NULL);
 }
 
+void PrintUsage() {
+  printf("USAGE: washmywaves wav_files_directory\n");
+  printf("  supported wav files:\n");
+  printf("    - All types of PCM formats within 8-bits and 32-bits.\n");
+  printf("    - IEEE float formats.\n");
+}
+
 int main(int argc, char* argv[]) {
   if (argc != 2) {
-    printf("USAGE: washmywaves wav_files_directory\n");
-    printf("  supported wav files:\n");
-    printf("    - All types of PCM formats within 8-bits and 32-bits.\n");
-    printf("    - IEEE float formats.\n");
+    PrintUsage();
     return 1;
   }
 
   std::vector<pthread_t> threads;
   std::vector<std::filesystem::path*> wav_files;
 
+  // check if the input parameter is a valid path to directory.
+  auto wav_dir = std::filesystem::path(argv[1]);
+  if (!std::filesystem::is_directory(wav_dir)) {
+    printf("cannot open %s.\n", argv[1]);
+    return 1;
+  }
+
   // directory_iterator, introduced in C++17, is platform independant.
   // we do not need to worry about compilation in windows/linux.
-  for (const auto &file : std::filesystem::directory_iterator(argv[1])) {
+  for (const auto &file : std::filesystem::directory_iterator(wav_dir)) {
     if (file.path().has_extension()) { 
       auto extention = std::string(file.path().extension());
       // make extention lowercase.
