@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <iterator>
-#include <math.h>
+#include <cstring>
+#include <cmath>
 
 #include "wav/header.hh"
 #include "utils/global.hh"
@@ -9,8 +10,6 @@
 #define RIFF_FORMAT_WAVE 0x45564157
 #define FMT_CHUNK_ID 0x20746d66
 #define DATA_CHUNK_ID 0x61746164
-
-#define MAX_BLOCK_ALIGN 8
 
 WavHeader::WavHeader(std::istream& input) : input_(input) {
   if (!input_) throw std::runtime_error("cannot open input stream.");
@@ -192,48 +191,66 @@ std::unique_ptr<std::string> WavHeader::ReadPCMData(unsigned int channel) {
   auto number_of_samples = GetNumberOfSamples();
   auto block_align = GetFormatChunkHeader().block_align;
   auto bits_per_sample = GetFormatChunkHeader().bits_per_sample;
+
+  // bits-width in some wav file are not divisable by 8, like 12, 20 and ...
+  // the cases, although uncommon, should be scaled up to 8 bits divided width.
+  // for example, to store a 12-bits sample, 16-bits are needed and 24-bits,
+  // for 20-bits sample.
   unsigned int sample_bits_ceiling = ceil((float)bits_per_sample / 8) * 8;
+
   auto number_of_channels = GetFormatChunkHeader().number_of_channels;
   auto result = new std::string();
   if (number_of_channels == 1 && channel > 0) {
+    // unsupported format.
     return std::unique_ptr<std::string>(result);
   }
+
+  // alocating space for the output buffer.
+  // we use std::string as an output buffer, because it is really easy to
+  // resize it and thus allocate buffer, without being worry of memory leaks.
   auto buffer_size = number_of_samples;
   if (sample_bits_ceiling <= 16) {
+    // each sample will be stored in a short int.
     buffer_size *= 2;
   } else {
+    // each sample will be stored in an int.
     buffer_size *= 4;
   }
   result->resize(buffer_size);
 
-  // read data.
+  // read pcm data.
   input_.seekg(data_index);
-  
   for (size_t i = 0; i < number_of_samples; i++) {
-    char block[MAX_BLOCK_ALIGN] = {0};
+    // read one block.
+    // each block contains a sample for each channel which are interleaved.
+    char block[block_align];
+    std::memset(block, 0, block_align);
     input_.read(block, block_align);
-    if (i < 5) {
-      HEX_DUMP((const unsigned char *)block, 8);
-    }
+    // if (i < 5) {
+    //   HEX_DUMP((const unsigned char *)block, 8);
+    // }
     if (sample_bits_ceiling == 8) {
-      uint8_t val = ((uint8_t *) block)[(channel == 0) ? 0 : 1];
+      // 8-bits width samples can be read into a byte.
+      uint8_t unscaled_value = ((uint8_t *) block)[(channel == 0) ? 0 : 1];
       auto out_offset = &((uint16_t *) result->c_str())[i];
-      *out_offset = ScaleAmplitude8(val);
+      *out_offset = ScaleAmplitude8(unscaled_value);
     }
     else if (sample_bits_ceiling == 16) {
-      uint16_t val = ((uint16_t *) block)[(channel == 0) ? 0 : 1];
+      // 16-bits width samples can be read into a short int
+      uint16_t unscaled_value = ((uint16_t *) block)[(channel == 0) ? 0 : 1];
       auto out_offset = &((uint16_t *) result->c_str())[i];
-      *out_offset = ScaleAmplitude16(val, bits_per_sample);
+      *out_offset = ScaleAmplitude16(unscaled_value, bits_per_sample);
     }
     else if (sample_bits_ceiling == 24 || sample_bits_ceiling == 32) {
-      uint32_t val = 0;
+      // larger samples can be read into an int.
+      uint32_t unscaled_value = 0;
       if (channel == 0) {
-        val = ((uint32_t *) block)[0];
+        unscaled_value = ((uint32_t *) block)[0];
       } else {
-        val = ((uint32_t *)((uint8_t *)block + block_align/2))[0];
+        unscaled_value = ((uint32_t *)((uint8_t *)block + block_align / 2))[0];
       }
       auto out_offset = &((uint32_t *) result->c_str())[i];
-      *out_offset = ScaleAmplitude32(val, bits_per_sample);
+      *out_offset = ScaleAmplitude32(unscaled_value, bits_per_sample);
     }
   }
 
