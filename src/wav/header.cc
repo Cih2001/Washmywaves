@@ -40,6 +40,25 @@ bool WavHeader::IsValidWav() {
     return false;
   }
 
+  // check for valid block align values.
+  auto block_align = GetFormatChunkHeader().block_align;
+  if (block_align % 8 != 0) {
+    // A valid block align is always divisable by 8.
+    return false;
+  }
+
+  auto number_of_channels = GetFormatChunkHeader().number_of_channels;
+  auto bits_per_sample = GetFormatChunkHeader().bits_per_sample;
+  // bits-width in some wav file are not divisable by 8, like 12, 20 and ...
+  // the cases, although uncommon, should be scaled up to 8 bits divided width.
+  // for example, to store a 12-bits sample, 16-bits are needed and 24-bits,
+  // for 20-bits sample.
+  unsigned int sample_bits_ceiling = ceil((float)bits_per_sample / 8) * 8;
+  if (block_align * 8 != sample_bits_ceiling * number_of_channels) {
+    // block align = sample_width(in bytes) * number_of_channels
+    return false;
+  }
+
   // TODO: we need more checks, like presence of data, chunks size and etc.
   return true;
 }
@@ -223,6 +242,10 @@ std::unique_ptr<std::string> WavHeader::ReadPCMData(unsigned int channel) {
   for (size_t i = 0; i < number_of_samples; i++) {
     // read one block.
     // each block contains a sample for each channel which are interleaved.
+    // CAUTION: we are allocating a buffer based on an input value (block_align)
+    // we should check block_align before hand. a malicously crafted wav file
+    // can cause potential problems here. that is why in IsValidWav() function,
+    // we have to check for valid values for block_align.
     char block[block_align];
     std::memset(block, 0, block_align);
     input_.read(block, block_align);
