@@ -1,8 +1,8 @@
 *.o
 *.swp
 *.swo
+*.mp3
 obj/
 .*/
 compile_commands.json
 washmywaves*
-test_data/

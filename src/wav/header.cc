@@ -42,11 +42,6 @@ bool WavHeader::IsValidWav() {
 
   // check for valid block align values.
   auto block_align = GetFormatChunkHeader().block_align;
-  if (block_align % 8 != 0) {
-    // A valid block align is always divisable by 8.
-    return false;
-  }
-
   auto number_of_channels = GetFormatChunkHeader().number_of_channels;
   auto bits_per_sample = GetFormatChunkHeader().bits_per_sample;
   // bits-width in some wav file are not divisable by 8, like 12, 20 and ...
@@ -56,6 +51,7 @@ bool WavHeader::IsValidWav() {
   unsigned int sample_bits_ceiling = ceil((float)bits_per_sample / 8) * 8;
   if (block_align * 8 != sample_bits_ceiling * number_of_channels) {
     // block align = sample_width(in bytes) * number_of_channels
+    printf("invalid block align, %d, %d, %d\n", block_align, sample_bits_ceiling, number_of_channels);
     return false;
   }
 
